@@ -1,0 +1,315 @@
+from sklearn.metrics.pairwise import euclidean_distances
+
+def init(k, mean):
+    return np.random.sample((k,2))*2-1 + mean
+
+def update(k, data, cluster_centers):
+    distances = euclidean_distances(data, cluster_centers)
+    assignments = distances.argmin(axis=1)
+    error = 0.5 * distances.min(axis=1).mean()
+    for i in range(k):
+        if np.count_nonzero(assignments == i) > 0:
+            cluster_centers[i] = data[assignments == i].mean(axis=0)
+    return cluster_centers, assignments, error
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+data_fid = '/Users/enduranceebhodaghe/BigData_SoSe2022/Lab03/cluster.dat'
+data = np.loadtxt(data_fid).T
+plt.scatter(data[:,0], data[:,1])
+
+def run_cluster(k, t_max, mean):
+    cluster_centers = init(k, mean) #Initial Guess
+    error = np.zeros(t_max)
+    
+    plt.close('all')
+    f = plt.figure(figsize=(15,10))
+    for t in range(t_max):
+        ax = f.add_subplot(3, 2, t + 1)
+        ax.set_title("number of clusters = %i, iteration = %i" % (k,t))
+        cluster_centers, assignments, error[t] = update(k, data, cluster_centers)
+        ax.scatter(data[:,0], data[:,1], c=assignments)
+        ax.scatter(cluster_centers[:,0], cluster_centers[:,1], c=range(k), s=200, edgecolors='r', linewidths=3)
+    f2, ax2 = plt.subplots(1)
+    ax2.plot(error)
+
+mean = data.mean(axis=0)   
+run_cluster(k=3, t_max=6, mean=mean)
+
+from ipywidgets import interact
+interact(run_cluster, k=(2,10), t_max=(3,6), mean=mean)
+
+import json
+import pandas as pd
+import numpy as np
+import geopandas as gpd
+#crs = {'init': 'epsg:4326'}
+crs = 'epsg:4326'
+#gdf.crs = 'epsg:4326'
+
+import shapely.wkt
+import cartopy.crs as ccrs
+from matplotlib.colors import LogNorm
+
+def colorbar_cartopy(mappable, cmap, **kwargs):
+    from mpl_toolkits.axes_grid1 import make_axes_locatable
+    ax = mappable.axes
+    fig = ax.figure
+    divider = make_axes_locatable(ax)   
+    cax = divider.append_axes("right", size="5%", pad=0.05, axes_class=plt.Axes, autoscale_on=False)
+    obj = fig.colorbar(cmap, cax=cax, **kwargs)
+    return obj 
+
+fid = '/Users/enduranceebhodaghe/BigData_SoSe2022/Lab03/USGS_Quakes_1999-2019.csv'
+df = pd.read_csv(fid, usecols=['geometry', 'mag', 'time', 'felt'])
+geom = [shapely.wkt.loads(wkt) for wkt in df.geometry.values]
+gdf = gpd.GeoDataFrame(df, crs=crs, geometry=geom)
+del df
+
+gdf.plot(figsize=(15,10))
+
+gdf.geometry[0].wkt
+
+def get_depth(x):
+    return x.z
+
+#for g in geom:
+#    depth = get_depth(g)
+    
+#depth = [get_depth(g) for g in geom]
+
+depth = list(map(lambda x: x.z, geom))
+
+#Add an explicit depth field  
+#gdf['depth'] = list(map(lambda x: x.z, geom))
+gdf['depth'] = depth
+
+gdf = gdf.sort_values(by='mag', axis=0, ascending=False)
+gdf.head()
+
+from sklearn.cluster import KMeans
+
+n_init = 100
+n_clusters = 6
+clf = KMeans(init='k-means++', n_init=n_init, n_clusters=n_clusters, random_state=100, max_iter=1000)
+labels = clf.fit_predict(gdf[['mag', 'depth']])
+
+plt.close('all')
+f = plt.figure(figsize=(15,10))
+ax = f.add_subplot(111, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(gdf.geometry.x, gdf.geometry.y, c=labels, s=3, cmap=plt.cm.get_cmap('Set1', n_clusters))
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Cluster Label')
+cb.ax.yaxis.set_ticks(range(n_clusters))
+
+f = plt.figure(figsize=(15,10))
+ax = f.add_subplot(111, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(gdf.geometry.x, gdf.geometry.y, c=gdf.depth, s=3, vmin=0, vmax=500, cmap=plt.cm.PuRd)
+cb = colorbar_cartopy(ax, img, extend='max')
+cb.set_label('Depth')
+
+plt.close('all')
+f = plt.figure(figsize=(15,10))
+ax = f.add_subplot(111)
+img = ax.scatter(gdf.mag, gdf.depth, c=labels, s=3, cmap=plt.cm.get_cmap('Set1', n_clusters))
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Cluster Label')
+cb.ax.yaxis.set_ticks(range(n_clusters))
+ax.set_xlabel('Magnitude')
+ax.set_ylabel('Depth')
+
+#Re-scaling
+gdf['depth_rs'] = (gdf.depth-gdf.depth.min())/(gdf.depth.max()-gdf.depth.min())
+gdf['mag_rs'] = (gdf.mag-gdf.mag.min())/(gdf.mag.max()-gdf.mag.min())
+
+#Normalization
+gdf['depth_norm'] = gdf.depth/np.linalg.norm(gdf.depth)
+gdf['mag_norm'] = gdf.mag/np.linalg.norm(gdf.mag)
+
+#Standardization
+gdf['depth_standard'] = (gdf.depth - np.nanmean(gdf.depth)) / np.nanstd(gdf.depth)
+gdf['mag_standard'] = (gdf.mag - np.nanmean(gdf.mag)) / np.nanstd(gdf.mag)
+
+#We can also log-normalize the magnitude data
+gdf['mag_lognorm'] = np.log(gdf.mag)/np.linalg.norm(np.log(gdf.mag))
+
+#NOTE--- these are different things! For k-means, we generally want standardized data -- the weights will thus
+#be equal between datasets. For some other kinds of machine learning, however, normalized data is needed.
+#We can take an additional step of re-scaling the data, but that is likely only necessary for really skewed data
+
+n_init = 100
+n_clusters = 6
+clf = KMeans(init='k-means++', n_init=n_init, n_clusters=n_clusters,random_state=100, max_iter=1000)
+labels = clf.fit_predict(gdf[['mag_norm', 'depth_norm']])
+
+plt.close('all')
+f = plt.figure(figsize=(15,10))
+ax = f.add_subplot(111, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(gdf.geometry.x, gdf.geometry.y, c=labels, s=3, cmap=plt.cm.get_cmap('Set1', n_clusters))
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Cluster Label')
+cb.ax.yaxis.set_ticks(range(n_clusters))
+
+from math import radians, sin, cos, sqrt, asin
+
+def haversine(point1, point2):
+    """
+    Calculate the great circle distance between two points 
+    on the earth (specified in decimal degrees)
+    via: https://stackoverflow.com/questions/54757259/computing-haversine-over-two-lists
+    """
+    lon1, lat1 = point1.bounds[0], point1.bounds[1]
+    lon2, lat2 = point2.bounds[0], point2.bounds[1]
+
+    # convert decimal degrees to radians 
+    lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
+
+    # haversine formula 
+    dlon = lon2 - lon1 
+    dlat = lat2 - lat1
+    a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
+    c = 2 * asin(sqrt(a))
+    r = 6371 # Radius of earth in kilometers
+    return c * r
+
+from shapely.geometry import Point
+location = Point(0,0)
+#gdf['dist_to_location'] = [haversine(x.centroid, location) for x in gdf.geometry]
+[haversine(x.centroid, location) for x in gdf.geometry[:10]] #Check distance to equator for 10 points
+#This could also be done via pdist: https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.distance.pdist.html
+
+import libpysal
+threshold = 3 #Limit of 3dd between related values
+alpha = -2 #Weights decay at a squared rate
+# version 2
+#W = pysal.lib.weights.distance.DistanceBand.from_dataframe(sub_gdf, threshold=threshold, alpha=alpha, binary=False, build_sp=False, ids=sub_gdf.index)
+W = libpysal.weights.distance.DistanceBand.from_dataframe(sub_gdf, threshold=threshold, alpha=alpha, binary=False, build_sp=False, ids=sub_gdf.index)
+
+lag = libpysal.weights.lag_spatial(W, sub_gdf.mag)
+
+sub_gdf['lag'] = lag
+sub_gdf = sub_gdf.sort_values('lag')
+sub_gdf.plot('lag', cmap=plt.cm.viridis, legend=True)
+#Highlights areas of strong spatial autocorrelation
+
+#This is to some degree a local smoother!
+
+f, ax = plt.subplots(1, figsize=(10, 10))
+
+plt.plot(sub_gdf.mag, sub_gdf.lag, '.')
+
+b,a = np.polyfit(sub_gdf.mag, sub_gdf.lag, 1)
+xvals = np.linspace(sub_gdf.mag.min(), sub_gdf.mag.max(), 100)
+plt.plot(xvals, a + b*xvals, 'r', linestyle='--', linewidth=2)
+plt.title('Moran Scatterplot')
+plt.ylabel('Spatial Lag')
+plt.xlabel('Magnitude')
+plt.text(8, 2.5e8, 'Pos spatial Corr (high similarity, high-high)')
+plt.text(0, 100, 'Pos spatial Corr (high similarity, low-low)')
+
+plt.text(0, 2.5e8, 'Neg spatial Corr (low similarity)')
+plt.text(8, 100, 'Neg spatial Corr (low similarity)')
+ax.set_xlim(0, 10)
+ax.set_yscale('log')
+ax.set_ylim(ax.get_ylim())
+
+plt.vlines(np.nanmean(sub_gdf.mag), ax.get_ylim()[0], ax.get_ylim()[1], linestyle='--', color='k')
+plt.hlines(np.nanmean(sub_gdf.lag), 0, 10, linestyle='--', color='k')
+
+from esda.moran import Moran
+
+I_mag = Moran(sub_gdf.mag, W)
+
+W2 = libpysal.weights.distance.Kernel.from_dataframe(sub_gdf, fixed=False, k=15)
+#Moran's I will not work with islands!
+
+#Notice that I standardized the magnitude values before running the clusters!
+from esda.moran import Moran_Local
+Y = sub_gdf.mag
+y_ =  (Y - np.nanmean(Y)) / np.nanstd(Y)
+m = Moran_Local(y_, W2, transformation='R', permutations=999) 
+#Permutations helps find the significance level (more is better, but slower)
+m.q #Holds information about hot/cold spots (which quadrant of the Moran's scatterplot we are in!)
+
+hot = sub_gdf.loc[m.q == 1]
+plt.close('all')
+f = plt.figure(figsize=(20,20))
+ax = f.add_subplot(211, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(hot.geometry.x, hot.geometry.y, s=3)
+cb.set_label('Hotspots')
+
+cold = hot = sub_gdf.loc[m.q == 3]
+ax = f.add_subplot(212, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(cold.geometry.x, cold.geometry.y, s=3)
+cb.set_label('Coldspots')
+
+I = m.Is
+I[m.p_sim > 0.05] = np.nan #Only displace statistically significant hot/cold spots
+I[m.q == 2] = np.nan #Get rid of spatially dispersed data
+I[m.q == 4] = np.nan
+
+plt.close('all')
+f = plt.figure(figsize=(20,20))
+ax = f.add_subplot(211, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(sub_gdf.geometry.x, sub_gdf.geometry.y, c=I, s=3, cmap=plt.cm.seismic, norm=LogNorm())
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Moran I Statistic')
+
+ax = f.add_subplot(212, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(sub_gdf.geometry.x, sub_gdf.geometry.y, c=sub_gdf.mag, s=3, cmap=plt.cm.seismic, norm=LogNorm())
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Magnitude')
+
+Y = sub_gdf.depth
+y_ =  (Y - np.nanmean(Y)) / np.nanstd(Y)
+m = Moran_Local(y_, W2, transformation='R', permutations=999) 
+
+I = m.Is
+I[m.p_sim > 0.05] = np.nan #Only displace statistically significant hot/cold spots
+I[m.q == 2] = np.nan #Get rid of spatially dispersed data
+I[m.q == 4] = np.nan
+
+plt.close('all')
+f = plt.figure(figsize=(20,20))
+ax = f.add_subplot(211, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(sub_gdf.geometry.x, sub_gdf.geometry.y, c=I, s=3, cmap=plt.cm.seismic, norm=LogNorm())
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Moran I Statistic')
+
+ax = f.add_subplot(212, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(sub_gdf.geometry.x, sub_gdf.geometry.y, c=sub_gdf.depth, s=3, cmap=plt.cm.viridis)
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Depth')
+
+from esda.getisord import G_Local
+Y = sub_gdf.mag
+y_ =  (Y - np.nanmean(Y)) / np.nanstd(Y)
+g = G_Local(y_, W2, transform='R', permutations=999)
+
+Z = g.Zs
+Z[g.p_sim > 0.05] = np.nan
+
+plt.close('all')
+f = plt.figure(figsize=(25,20))
+ax = f.add_subplot(211, projection=ccrs.PlateCarree())
+ax.coastlines()
+vmin, vmax = np.nanpercentile(Z, [5,95])
+img = ax.scatter(sub_gdf.geometry.x, sub_gdf.geometry.y, c=Z, s=3, vmin=vmin, vmax=vmax, cmap=plt.cm.magma_r)#, norm=LogNorm())
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Hotspot Z Score')
+
+ax = f.add_subplot(212, projection=ccrs.PlateCarree())
+ax.coastlines()
+img = ax.scatter(sub_gdf.geometry.x, sub_gdf.geometry.y, c=sub_gdf.mag, s=3, cmap=plt.cm.seismic, norm=LogNorm())
+cb = colorbar_cartopy(ax, img)
+cb.set_label('Magnitude')
